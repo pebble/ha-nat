@@ -101,11 +101,7 @@ iptables -n -t nat -L POSTROUTING | log
 
 log "Configuration of NAT/PAT complete."
 
-# Install AWS CLI tool
-#apt-get -y install python-pip
-#pip install --upgrade awscli  && log "AWS CLI Upgraded Successfully. Beginning HA NAT configuration..."
-
-awscmd="/usr/local/bin/aws"
+awscmd="/usr/bin/aws"
 
 # Set CLI Output to text
 export AWS_DEFAULT_OUTPUT="text"
