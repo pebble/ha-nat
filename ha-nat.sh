@@ -1,6 +1,7 @@
 #!/bin/bash
 #
 # Copyright 2013 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# Edited by Ben Whaley, bwhaley@gmail.com
 #
 # Licensed under the Apache License, Version 2.0 (the "License").
 # You may not use this file except in compliance with the License.
@@ -18,15 +19,14 @@
 # creates a default NAT route for Route Tables associated to subnets that are:
 # 1. tagged with key/value "network=private"
 # 2. in the same VPC as the instance running script
-# 3. in the same AZ as the instance running script
 #
 # Prerequisites:
-# 
+#
 # 1. Instance should be in an Availability Autoscaling group with min/max size of 1
 #    Example Autoscaling launch configuration:
-#		aws autoscaling create-auto-scaling-group --auto-scaling-group-name ha-nat-asg\
-#	    --launch-configuration-name ha-nat-launch --min-size 1 --max-size 1\
-#	    --vpc-zone-identifier subnet-xxxxxxxx
+#   aws autoscaling create-auto-scaling-group --auto-scaling-group-name ha-nat-asg\
+#     --launch-configuration-name ha-nat-launch --min-size 1 --max-size 1\
+#     --vpc-zone-identifier subnet-xxxxxxxx
 #
 # 2. AWS CLI version 1.2.2 or higher. By default, script will update instance to the latest version.
 # 3. Private subnets must be tagged with tag Name=network and Value=private. Case IS sensitive.
@@ -38,12 +38,12 @@
 #     {
 #       "Effect": "Allow",
 #       "Action": [
-#     	  "ec2:DescribeInstances",
-#   	  "ec2:ModifyInstanceAttribute",
-#   	  "ec2:DescribeSubnets",
-#   	  "ec2:DescribeRouteTables",
-#   	  "ec2:CreateRoute",
-#   	  "ec2:ReplaceRoute"
+#         "ec2:DescribeInstances",
+#       "ec2:ModifyInstanceAttribute",
+#       "ec2:DescribeSubnets",
+#       "ec2:DescribeRouteTables",
+#       "ec2:CreateRoute",
+#       "ec2:ReplaceRoute"
 #       ],
 #       "Resource": "*"
 #     }
@@ -52,26 +52,26 @@
 #
 #
 # Caveats:
-#	If the VPC configuration uses a single Route Table associated to multiple private subnets
-#   in multiple AZs, then the HA NAT script would modify private subnets in other AZs. The 
+# If the VPC configuration uses a single Route Table associated to multiple private subnets
+#   in multiple AZs, then the HA NAT script would modify private subnets in other AZs. The
 #   recommended HA NAT configuration is 1 NAT per AZ and 1 unique private Route Table per AZ.
 
 # Enable for debugging
 # set -x
 
-function log { logger -t "vpc" -- $1; }
+function log { echo $1; }
 
 function die {
-	[ -n "$1" ] && log "$1"
-	log "Configuration of HA NAT failed!"
-	exit 1
+  [ -n "$1" ] && log "$1"
+  log "Configuration of HA NAT failed!"
+  exit 1
 }
 
 # Sanitize PATH
 PATH="/usr/sbin:/sbin:/usr/bin:/bin"
 
-# Configure the instance to run as a Port Address Translator (PAT) to provide 
-# Internet connectivity to private instances. 
+# Configure the instance to run as a Port Address Translator (PAT) to provide
+# Internet connectivity to private instances.
 
 log "Beginning Port Address Translator (PAT) configuration..."
 log "Determining the MAC address on eth0..."
@@ -101,8 +101,11 @@ iptables -n -t nat -L POSTROUTING | log
 
 log "Configuration of NAT/PAT complete."
 
-# Upgrade AWS CLI to latest version
-easy_install --upgrade awscli && log "AWS CLI Upgraded Successfully. Beginning HA NAT configuration..."
+# Install AWS CLI tool
+#apt-get -y install python-pip
+#pip install --upgrade awscli  && log "AWS CLI Upgraded Successfully. Beginning HA NAT configuration..."
+
+awscmd="/usr/local/bin/aws"
 
 # Set CLI Output to text
 export AWS_DEFAULT_OUTPUT="text"
@@ -111,60 +114,63 @@ export AWS_DEFAULT_OUTPUT="text"
 II_URI="http://169.254.169.254/latest/dynamic/instance-identity/document"
 
 # Set region of NAT instance
-REGION=`curl --retry 3 --retry-delay 0 --silent --fail $II_URI | grep region | awk -F\" '{print $4}'`
+REGION=$(curl --retry 3 --retry-delay 0 --silent --fail $II_URI | grep region | awk -F\" '{print $4}')
 
 # Set AWS CLI default Region
 export AWS_DEFAULT_REGION=$REGION
 
 # Set AZ of NAT instance
-AVAILABILITY_ZONE=`curl --retry 3 --retry-delay 0 --silent --fail $II_URI | grep availabilityZone | awk -F\" '{print $4}'`
+AVAILABILITY_ZONE=$(curl --retry 3 --retry-delay 0 --silent --fail $II_URI | grep availabilityZone | awk -F\" '{print $4}')
 
 # Set Instance ID from metadata
-INSTANCE_ID=`curl --retry 3 --retry-delay 0 --silent --fail $II_URI | grep instanceId | awk -F\" '{print $4}'`
+INSTANCE_ID=$(curl --retry 3 --retry-delay 0 --silent --fail $II_URI | grep instanceId | awk -F\" '{print $4}')
 
 # Set VPC_ID of Instance
-VPC_ID=`aws ec2 describe-instances --instance-ids $INSTANCE_ID --query 'Reservations[*].Instances[*].VpcId'` ||
-	die "Unable to determine VPC ID for instance."
+VPC_ID=$(${awscmd} ec2 describe-instances --instance-ids $INSTANCE_ID --query 'Reservations[*].Instances[*].VpcId') ||
+  die "Unable to determine VPC ID for instance."
 
 # Determine Main Route Table for the VPC
-MAIN_RT=`aws ec2 describe-route-tables --query 'RouteTables[*].RouteTableId' --filters Name=vpc-id,Values=$VPC_ID Name=association.main,Values=true` ||
-	die "Unable to determine VPC Main Route Table."
-	
-log "HA NAT configuration parameters: Instance ID=$INSTANCE_ID, Region=$REGION, Availability Zone=$AVAILABILITY_ZONE, VPC=$VPC_ID"
+MAIN_RT=$(${awscmd} ec2 describe-route-tables --query 'RouteTables[*].RouteTableId' --filters Name=vpc-id,Values=$VPC_ID Name=association.main,Values=true) ||
+  die "Unable to determine VPC Main Route Table."
 
-# Get list of subnets in same VPC and AZ that have tag network=private
-PRIVATE_SUBNETS="`aws ec2 describe-subnets --query 'Subnets[*].SubnetId' \
---filters Name=availability-zone,Values=$AVAILABILITY_ZONE Name=vpc-id,Values=$VPC_ID Name=state,Values=available Name=tag:network,Values=private`"
-	# If no private subnets found, exit out
-	if [ -z "$PRIVATE_SUBNETS" ]; then
-		die "No private subnets found to modify for HA NAT."
-	else log "Modifying Route Tables for following private subnets: $PRIVATE_SUBNETS"
-	fi
+log "HA NAT configuration parameters: Instance ID=$INSTANCE_ID, Region=$REGION, VPC=$VPC_ID"
+
+# Get list of subnets in same VPC that have tag network=private
+PRIVATE_SUBNETS="$(${awscmd} ec2 describe-subnets --query 'Subnets[*].SubnetId' \
+--filters Name=vpc-id,Values=$VPC_ID Name=state,Values=available Name=tag:Network,Values=Private)"
+# Substitute the previous line with the next line if you want only one NAT instance for all zones (make sure to set the autoscale group to min/max/desired 1)
+#--filters Name=vpc-id,Values=$VPC_ID Name=state,Values=available Name=tag:network,Values=private)"
+# If no private subnets found, exit out
+if [ -z "$PRIVATE_SUBNETS" ]; then
+  die "No private subnets found to modify for HA NAT."
+else 
+  log "Modifying Route Tables for following private subnets: $PRIVATE_SUBNETS"
+fi
 for subnet in $PRIVATE_SUBNETS; do
-	ROUTE_TABLE_ID=`aws ec2 describe-route-tables --query 'RouteTables[*].RouteTableId' --filters Name=association.subnet-id,Values=$subnet`;
-	# If private tagged subnet is associated with Main Routing Table, do not create or modify route.
-	if [ "$ROUTE_TABLE_ID" = "$MAIN_RT" ]; then
-		log "$subnet is associated with the VPC Main Route Table. HA NAT script will NOT edit Main Route Table."
-	# If subnet is not associated with a Route Table, skip it.
-	elif [ -z "$ROUTE_TABLE_ID" ]; then
-		log "$subnet is not associated with a Route Table. Skipping this subnet."
-	else
-		# Modify found private subnet's Routing Table to point to new HA NAT instance id
-		aws ec2 create-route --route-table-id $ROUTE_TABLE_ID --destination-cidr-block 0.0.0.0/0 --instance-id $INSTANCE_ID &&
-		log "$ROUTE_TABLE_ID associated with $subnet modified to point default route to $INSTANCE_ID."
-		if [ $? -ne 0 ] ; then
-			log "Route already exists, replacing existing route."
-			aws ec2 replace-route --route-table-id $ROUTE_TABLE_ID --destination-cidr-block 0.0.0.0/0 --instance-id $INSTANCE_ID
-		fi
-	fi
+  ROUTE_TABLE_ID=$(${awscmd} ec2 describe-route-tables --query 'RouteTables[*].RouteTableId' --filters Name=association.subnet-id,Values=$subnet);
+  # If private tagged subnet is associated with Main Routing Table, do not create or modify route.
+  if [ "$ROUTE_TABLE_ID" = "$MAIN_RT" ]; then
+    log "$subnet is associated with the VPC Main Route Table. HA NAT script will NOT edit Main Route Table."
+  # If subnet is not associated with a Route Table, skip it.
+  elif [ -z "$ROUTE_TABLE_ID" ]; then
+    log "$subnet is not associated with a Route Table. Skipping this subnet."
+  else
+    # Modify found private subnet's Routing Table to point to new HA NAT instance id
+    ${awscmd} ec2 create-route --route-table-id $ROUTE_TABLE_ID --destination-cidr-block 0.0.0.0/0 --instance-id $INSTANCE_ID &&
+    log "$ROUTE_TABLE_ID associated with $subnet modified to point default route to $INSTANCE_ID."
+    if [ $? -ne 0 ] ; then
+      log "Route already exists, replacing existing route."
+      ${awscmd} ec2 replace-route --route-table-id $ROUTE_TABLE_ID --destination-cidr-block 0.0.0.0/0 --instance-id $INSTANCE_ID
+    fi
+  fi
 done
 
 if [ $? -ne 0 ] ; then
-	die
+  die
 fi
 
 # Turn off source / destination check
-aws ec2 modify-instance-attribute --instance-id $INSTANCE_ID --source-dest-check "{\"Value\": false}" &&
+${awscmd} ec2 modify-instance-attribute --instance-id $INSTANCE_ID --source-dest-check "{\"Value\": false}" &&
 log "Source Destination check disabled for $INSTANCE_ID."
 
 log "Configuration of HA NAT complete."
